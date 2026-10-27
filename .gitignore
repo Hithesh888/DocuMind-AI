@@ -1,0 +1,32 @@
+
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local vector database
+chroma_db/
+
+# Local test documents
+library.txt
+rag_test.txt
+
+# Private documents and data
+.env
+.env.*
+!.env.example
+secrets.toml
+.streamlit/secrets.toml
+*.db
+*.sqlite
+*.sqlite3
+*.pdf
+*.docx
+*.xlsx
+*.csv
+
+# IDE and temporary files
+.vscode/
+.idea/
+*.log
+.DS_Store
+Thumbs.db
