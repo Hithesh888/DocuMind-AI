@@ -1,985 +1,769 @@
 
-import streamlit as st
-import pandas as pd
-import ollama
-import chromadb
-
+import io
+import uuid
 from pathlib import Path
+
+import chromadb
+import ollama
+import pandas as pd
+import streamlit as st
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-
-# ==========================================
-# PAGE CONFIGURATION
-# ==========================================
-
-st.set_page_config(
-    page_title="DocuMind AI",
-    page_icon="📚",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "chroma_db"
+DB_DIR = BASE_DIR / "chroma_db"
 
 MODEL_NAME = "llama3.2:1b"
 EMBEDDING_NAME = "all-MiniLM-L6-v2"
-COLLECTION_NAME = "documents"
-
 CHUNK_SIZE = 700
 CHUNK_OVERLAP = 100
-TOP_K_PER_DOCUMENT = 4
-MAX_CONTEXT_CHUNKS = 8
+TOP_K = 4
 
-
-# ==========================================
-# PROFESSIONAL CSS
-# ==========================================
+st.set_page_config(
+    page_title="DocuMind AI",
+    page_icon="🌿",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 :root {
-    --primary: #7667F5;
-    --primary-light: #A99EFF;
-    --background: #0B1020;
-    --surface: #121A2B;
-    --border: #29344A;
-    --muted: #9BA9BF;
-    --text: #F1F5FB;
+    color-scheme: light;
 }
 
 html, body, [class*="css"] {
     font-family: 'Inter', sans-serif;
 }
 
-.stApp {
-    background:
-        radial-gradient(ellipse at 70% 0%, #18203B 0%, transparent 42%),
-        var(--background);
-    color: var(--text);
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
+[data-testid="stMainBlockContainer"],
+[data-testid="stBottom"],
+[data-testid="stBottomBlockContainer"] {
+    background: #F7F5ED !important;
+    color: #45483F !important;
 }
 
-header[data-testid="stHeader"] {
-    background: transparent;
+[data-testid="stHeader"] {
+    background: #F7F5ED !important;
 }
 
-[data-testid="stSidebar"] {
-    background: #0E1525;
-    border-right: 1px solid var(--border);
+[data-testid="stSidebar"],
+[data-testid="stSidebarContent"] {
+    background: #FFFFFF !important;
+    color: #45483F !important;
+    border-right: 1px solid #E7E4D9 !important;
 }
 
-[data-testid="stSidebar"] > div:first-child {
-    padding-top: 1.3rem;
-}
-
-.block-container {
-    max-width: 1200px;
-    padding-top: 2rem;
-    padding-bottom: 7rem;
-}
-
-.brand {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 25px;
-}
-
-.brand-icon {
-    width: 46px;
-    height: 46px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: linear-gradient(135deg, #8B7CFF, #5D4AE8);
-    border-radius: 14px;
-    font-size: 24px;
-    box-shadow: 0 8px 24px #7667F533;
-}
-
-.brand-title {
-    font-size: 22px;
-    font-weight: 800;
-    color: #F5F6FF;
-    letter-spacing: -0.7px;
-}
-
-.brand-subtitle {
-    font-size: 11px;
-    color: var(--muted);
-    margin-top: 3px;
+[data-testid="stSidebar"] * {
+    color: #45483F;
 }
 
 .hero {
-    background: linear-gradient(125deg, #171E37, #14192B 65%, #1B1938);
-    border: 1px solid #353455;
-    border-radius: 22px;
+    background: linear-gradient(135deg, #FFFFFF, #F0F4E9);
+    border: 1px solid #E3E8DA;
+    border-radius: 20px;
     padding: 30px;
-    margin-bottom: 25px;
-    position: relative;
-    overflow: hidden;
+    margin-bottom: 22px;
 }
 
-.hero-tag {
-    display: inline-block;
-    color: #C0B8FF;
-    background: #7667F51C;
-    border: 1px solid #7667F555;
-    border-radius: 20px;
-    padding: 6px 11px;
-    font-size: 11px;
-    font-weight: 600;
-    margin-bottom: 15px;
+.eyebrow {
+    color: #718567;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 1.5px;
 }
 
 .hero h1 {
-    font-size: clamp(27px, 4vw, 39px);
-    line-height: 1.2;
-    letter-spacing: -1.3px;
-    color: #FFFFFF;
-    margin: 0 0 13px 0;
+    font-size: 34px;
+    line-height: 1.25;
+    color: #424A3C;
+    margin: 10px 0;
 }
 
 .hero p {
-    color: #AAB6CD;
-    font-size: 14px;
-    line-height: 1.8;
-    max-width: 650px;
+    color: #77796F;
+    font-size: 15px;
     margin-bottom: 0;
 }
 
-.section-label {
-    color: #A9B6CD;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    font-size: 10px;
-    font-weight: 700;
-}
-
 .metric-card {
-    background: linear-gradient(145deg, #161F32, #111827);
-    border: 1px solid var(--border);
-    border-radius: 15px;
-    padding: 17px;
-    min-height: 112px;
-}
-
-.metric-icon {
-    font-size: 19px;
-    margin-bottom: 12px;
-}
-
-.metric-number {
-    font-size: 25px;
-    font-weight: 800;
-    color: #F5F6FF;
+    background: #FFFFFF;
+    border: 1px solid #E7E4D9;
+    border-radius: 16px;
+    padding: 18px;
+    min-height: 100px;
 }
 
 .metric-label {
-    color: var(--muted);
+    font-size: 13px;
+    color: #858579;
+}
+
+.metric-value {
+    font-size: 24px;
+    font-weight: 800;
+    color: #4E5E46;
+    margin-top: 8px;
+}
+
+.section-title {
+    color: #45483F;
+    font-size: 19px;
+    font-weight: 700;
+    margin: 10px 0 14px;
+}
+
+.sidebar-brand {
+    font-size: 24px;
+    font-weight: 800;
+    color: #4D5D44;
+    letter-spacing: -0.8px;
+}
+
+.sidebar-subtitle {
+    color: #8C8C7F;
     font-size: 12px;
-    margin-top: 4px;
+    margin-top: 2px;
 }
 
-div[data-testid="stChatMessage"] {
-    background: #131B2C;
-    border: 1px solid #263249;
-    border-radius: 16px;
-    padding: 18px;
-    margin-bottom: 15px;
-}
-
-div[data-testid="stChatInput"] {
-    border: 1px solid #3B4165;
-    border-radius: 17px;
-    background: #151C2D;
-}
-
-div[data-testid="stChatInput"]:focus-within {
-    border-color: #8275FF;
-    box-shadow: 0 0 0 1px #8275FF44;
-}
-
-.stButton > button {
-    border-radius: 10px;
-    border: 1px solid #343D55;
-    background: #182135;
-    color: #E9EDFA;
-    font-weight: 600;
-    min-height: 42px;
-    transition: all 0.2s ease;
-}
-
-.stButton > button:hover {
-    border-color: #8678FF;
-    color: #FFFFFF;
-    background: #252445;
-}
-
-.stButton > button[kind="primary"] {
-    background: linear-gradient(110deg, #7667F5, #6454E5);
-    border: none;
-    color: white;
-}
-
-.stButton > button[kind="primary"]:hover {
-    background: linear-gradient(110deg, #8B7CFF, #7667F5);
-}
-
-.stTextInput input,
-.stSelectbox div[data-baseweb="select"],
-.stMultiSelect div[data-baseweb="select"] {
-    background: #141D2E;
-    border-color: #303B53;
-}
-
-div[data-testid="stExpander"] {
-    background: #111A2A;
-    border: 1px solid #29344A;
-    border-radius: 12px;
-}
-
-div[data-testid="stFileUploader"] {
-    background: #131B2B;
-    border: 1px dashed #45466B;
-    border-radius: 14px;
-    padding: 10px;
-}
-
-[data-testid="stCaptionContainer"] {
-    color: #94A3B8;
-}
-
-hr {
-    border-color: #29344A;
+.info-note {
+    color: #858579;
+    font-size: 12px;
+    line-height: 1.6;
 }
 
 .footer {
+    color: #969587;
+    font-size: 12px;
     text-align: center;
-    color: #718099;
-    font-size: 11px;
-    padding: 28px 0 8px 0;
+    padding: 24px 0 8px;
 }
 
-.status-dot {
-    display: inline-block;
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: #4ADEA8;
-    margin-right: 6px;
+/* Buttons */
+.stButton > button {
+    background: #E7EEDF !important;
+    color: #4D6045 !important;
+    border: 1px solid #D7E1CD !important;
+    border-radius: 11px !important;
+    min-height: 42px;
+    font-weight: 600;
 }
 
-@media (max-width: 700px) {
-    .hero {
-        padding: 22px;
-    }
-    .block-container {
-        padding-top: 1rem;
-    }
+.stButton > button:hover {
+    background: #D9E6CF !important;
+    color: #394B32 !important;
+    border-color: #C6D6BA !important;
+}
+
+.stButton > button[kind="primary"] {
+    background: #829875 !important;
+    color: #FFFFFF !important;
+    border-color: #829875 !important;
+}
+
+/* Chat messages */
+[data-testid="stChatMessage"],
+[data-testid="stChatMessageContent"],
+.stChatMessage {
+    background: #FFFFFF !important;
+    color: #45483F !important;
+    border: 1px solid #E7E4D9 !important;
+    border-radius: 16px !important;
+}
+
+/* Chat input */
+[data-testid="stChatInput"],
+[data-testid="stChatInput"] > div,
+[data-testid="stChatInput"] > div > div,
+[data-testid="stChatInput"] textarea {
+    background: #FFFFFF !important;
+    color: #45483F !important;
+    border-color: #D7E1CD !important;
+    box-shadow: none !important;
+    -webkit-text-fill-color: #45483F !important;
+}
+
+/* Text inputs */
+input,
+textarea,
+[data-baseweb="input"],
+[data-baseweb="input"] > div,
+[data-baseweb="textarea"],
+[data-baseweb="textarea"] > div {
+    background: #FFFFFF !important;
+    color: #45483F !important;
+    border-color: #D7E1CD !important;
+    box-shadow: none !important;
+    -webkit-text-fill-color: #45483F !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+    color: #969587 !important;
+    -webkit-text-fill-color: #969587 !important;
+}
+
+/* FIX: Sidebar document selection dropdown */
+[data-testid="stSidebar"] [data-baseweb="select"] > div {
+    background-color: #F0F4E9 !important;
+    border: 1px solid #D7E1CD !important;
+    border-radius: 10px !important;
+    color: #4D5D44 !important;
+    box-shadow: none !important;
+}
+
+/* FIX: Selected document tags instead of red tags */
+[data-testid="stSidebar"] [data-baseweb="tag"] {
+    background-color: #DDE8D3 !important;
+    color: #45583D !important;
+    border: 1px solid #C8D8BD !important;
+    border-radius: 6px !important;
+}
+
+[data-testid="stSidebar"] [data-baseweb="tag"] span {
+    color: #45583D !important;
+}
+
+[data-testid="stSidebar"] [data-baseweb="tag"] svg {
+    fill: #617654 !important;
+    color: #617654 !important;
+}
+
+/* Dropdown text and icons */
+[data-testid="stSidebar"] [data-baseweb="select"] *,
+[data-testid="stSidebar"] [data-baseweb="select"] input {
+    color: #4D5D44 !important;
+    -webkit-text-fill-color: #4D5D44 !important;
+}
+
+/* Dropdown menus and options */
+[data-baseweb="popover"],
+[data-baseweb="menu"],
+[role="listbox"],
+[role="option"] {
+    background-color: #FFFFFF !important;
+    color: #45483F !important;
+}
+
+[role="option"]:hover {
+    background-color: #F0F4E9 !important;
+}
+
+/* File uploader */
+[data-testid="stFileUploader"],
+[data-testid="stFileUploaderDropzone"],
+[data-testid="stFileUploaderDropzone"] > div {
+    background: #F0F4E9 !important;
+    color: #45483F !important;
+    border-color: #D7E1CD !important;
+}
+
+[data-testid="stFileUploaderDropzone"] button {
+    background: #E7EEDF !important;
+    color: #4D6045 !important;
+    border-color: #D7E1CD !important;
+}
+
+/* Expanders and bordered containers */
+[data-testid="stExpander"],
+[data-testid="stExpander"] details,
+[data-testid="stExpander"] details > summary,
+[data-testid="stVerticalBlockBorderWrapper"] {
+    background: #FFFFFF !important;
+    color: #45483F !important;
+    border-color: #E7E4D9 !important;
+}
+
+/* FIX: chroma_db inline code label */
+[data-testid="stSidebar"] code {
+    background: #E7EEDF !important;
+    color: #4D6045 !important;
+    border: 1px solid #D7E1CD !important;
+    border-radius: 5px !important;
+    padding: 2px 5px !important;
+}
+
+/* Alerts and metrics */
+[data-testid="stMetric"],
+[data-testid="stAlert"] {
+    background: #FFFFFF !important;
+    color: #45483F !important;
+    border-color: #E7E4D9 !important;
+}
+
+/* General text */
+[data-testid="stMarkdownContainer"],
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stCaptionContainer"],
+label {
+    color: #45483F;
+}
+
+hr {
+    border-color: #E7E4D9 !important;
+}
+
+:focus-visible {
+    outline-color: #829875 !important;
 }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ==========================================
-# MODELS AND DATABASE
-# ==========================================
-
 @st.cache_resource
-def load_embedding_model():
-    return SentenceTransformer(EMBEDDING_NAME)
-
-
-@st.cache_resource
-def load_database():
-    db_client = chromadb.PersistentClient(
-        path=str(DB_PATH)
+def get_resources():
+    client = chromadb.PersistentClient(path=str(DB_DIR))
+    collection = client.get_or_create_collection(
+        name="documents",
+        metadata={"hnsw:space": "cosine"},
     )
-    db_collection = db_client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        metadata={"hnsw:space": "cosine"}
-    )
-    return db_client, db_collection
+    model = SentenceTransformer(EMBEDDING_NAME)
+    return collection, model
 
 
-model = load_embedding_model()
-client, collection = load_database()
-
-
-# ==========================================
-# DOCUMENT READING
-# ==========================================
-
-def read_uploaded_file(uploaded_file):
-    filename = uploaded_file.name
-    extension = Path(filename).suffix.lower()
-    parts = []
-
-    if extension == ".pdf":
-        reader = PdfReader(uploaded_file)
-
-        for page_number, page in enumerate(
-            reader.pages, start=1
-        ):
-            text = page.extract_text() or ""
-
-            if text.strip():
-                parts.append({
-                    "text": text,
-                    "metadata": {
-                        "source": filename,
-                        "page": page_number
-                    }
-                })
-
-    elif extension == ".txt":
-        text = uploaded_file.getvalue().decode(
-            "utf-8",
-            errors="replace"
-        )
-
-        if text.strip():
-            parts.append({
-                "text": text,
-                "metadata": {
-                    "source": filename,
-                    "page": 1
-                }
-            })
-
-    elif extension == ".csv":
-        df = pd.read_csv(uploaded_file).fillna("")
-
-        for row_number, row in enumerate(
-            df.to_dict(orient="records"),
-            start=1
-        ):
-            row_text = "\n".join(
-                f"{column}: {value}"
-                for column, value in row.items()
-            )
-
-            if row_text.strip():
-                parts.append({
-                    "text": row_text,
-                    "metadata": {
-                        "source": filename,
-                        "row": row_number
-                    }
-                })
-
-    return parts
-
-
-# ==========================================
-# TEXT CHUNKING
-# ==========================================
-
-def make_chunks(parts):
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP
-    )
+def split_text(text):
+    text = text.strip()
+    if not text:
+        return []
 
     chunks = []
+    start = 0
 
-    for part in parts:
-        for text in splitter.split_text(part["text"]):
-            if text.strip():
-                chunks.append({
-                    "text": text,
-                    "metadata": part["metadata"].copy()
-                })
+    while start < len(text):
+        end = min(start + CHUNK_SIZE, len(text))
+        chunk = text[start:end].strip()
+
+        if chunk:
+            chunks.append(chunk)
+
+        if end == len(text):
+            break
+
+        start = end - CHUNK_OVERLAP
 
     return chunks
 
 
-# ==========================================
-# INDEX DOCUMENTS
-# ==========================================
+def extract_text(uploaded_file):
+    filename = uploaded_file.name
+    raw = uploaded_file.getvalue()
+    suffix = Path(filename).suffix.lower()
 
-def process_documents(files):
-    for uploaded_file in files:
-        filename = uploaded_file.name
+    if suffix == ".pdf":
+        reader = PdfReader(io.BytesIO(raw))
+        pages = []
 
-        try:
-            parts = read_uploaded_file(uploaded_file)
+        for page_number, page in enumerate(reader.pages, start=1):
+            page_text = page.extract_text() or ""
 
-            if not parts:
-                st.warning(
-                    f"No readable text found in {filename}."
-                )
-                continue
+            if page_text.strip():
+                pages.append(f"[Page {page_number}]\n{page_text}")
 
-            chunks = make_chunks(parts)
+        return "\n\n".join(pages)
 
-            if not chunks:
-                st.warning(
-                    f"No text chunks created for {filename}."
-                )
-                continue
+    if suffix == ".txt":
+        return raw.decode("utf-8", errors="replace")
 
-            texts = [chunk["text"] for chunk in chunks]
-            metadatas = [
-                chunk["metadata"] for chunk in chunks
-            ]
+    if suffix == ".csv":
+        dataframe = pd.read_csv(io.BytesIO(raw)).fillna("")
+        return dataframe.to_string(index=False)
 
-            embeddings = model.encode(
-                texts,
-                normalize_embeddings=True,
-                show_progress_bar=False
-            ).tolist()
-
-            # Replace previous chunks from the same file.
-            collection.delete(
-                where={"source": filename}
-            )
-
-            ids = [
-                f"{filename}_{index}"
-                for index in range(len(chunks))
-            ]
-
-            collection.add(
-                ids=ids,
-                documents=texts,
-                metadatas=metadatas,
-                embeddings=embeddings
-            )
-
-            st.success(
-                f"✓ {filename} — {len(chunks)} chunks indexed"
-            )
-
-        except Exception as error:
-            st.error(
-                f"Could not process {filename}: {error}"
-            )
+    raise ValueError("Upload a PDF, TXT, or CSV file.")
 
 
-# ==========================================
-# DOCUMENT LIST
-# ==========================================
+def index_document(uploaded_file, collection, embedding_model):
+    filename = uploaded_file.name
+    text = extract_text(uploaded_file)
+    chunks = split_text(text)
 
-def get_available_files():
-    if collection.count() == 0:
-        return []
+    if not chunks:
+        raise ValueError(
+            "No readable text found. Scanned PDFs may require OCR."
+        )
 
-    result = collection.get(
-        include=["metadatas"]
+    existing = collection.get(
+        where={"source": filename},
+        include=["metadatas"],
     )
+    old_ids = existing.get("ids", [])
 
-    return sorted({
-        metadata["source"]
-        for metadata in (result.get("metadatas") or [])
-        if metadata and metadata.get("source")
-    })
+    if old_ids:
+        collection.delete(ids=old_ids)
 
-
-# ==========================================
-# RETRIEVAL
-# ==========================================
-
-def retrieve_context(question, selected_files):
-    if not selected_files:
-        return []
-
-    query_embedding = model.encode(
-        [question],
-        normalize_embeddings=True
+    embeddings = embedding_model.encode(
+        chunks,
+        normalize_embeddings=True,
     ).tolist()
 
-    retrieved = []
+    ids = [str(uuid.uuid4()) for _ in chunks]
+    metadatas = [
+        {"source": filename, "chunk": i + 1}
+        for i in range(len(chunks))
+    ]
 
-    for filename in selected_files:
-        file_result = collection.get(
-            where={"source": filename},
-            include=["metadatas"]
-        )
-
-        file_count = len(file_result.get("ids", []))
-
-        if file_count == 0:
-            continue
-
-        result = collection.query(
-            query_embeddings=query_embedding,
-            n_results=min(TOP_K_PER_DOCUMENT, file_count),
-            where={"source": filename},
-            include=[
-                "documents",
-                "metadatas",
-                "distances"
-            ]
-        )
-
-        texts = result.get("documents", [[]])[0]
-        metadatas = result.get("metadatas", [[]])[0]
-        distances = result.get("distances", [[]])[0]
-
-        for text, metadata, distance in zip(
-            texts, metadatas, distances
-        ):
-            retrieved.append({
-                "text": text,
-                "metadata": metadata or {},
-                "distance": distance
-            })
-
-    retrieved.sort(
-        key=lambda item: item["distance"]
+    collection.add(
+        ids=ids,
+        documents=chunks,
+        embeddings=embeddings,
+        metadatas=metadatas,
     )
 
-    return retrieved[:MAX_CONTEXT_CHUNKS]
+    return len(chunks)
 
 
-# ==========================================
-# SOURCE FORMATTING
-# ==========================================
+def get_document_names(collection):
+    result = collection.get(include=["metadatas"])
+    names = set()
 
-def source_location(metadata):
-    filename = metadata.get("source", "Unknown file")
+    for metadata in result.get("metadatas", []):
+        if metadata and metadata.get("source"):
+            names.add(metadata["source"])
 
-    if "page" in metadata:
-        return f"{filename} · Page {metadata['page']}"
-
-    if "row" in metadata:
-        return f"{filename} · Row {metadata['row']}"
-
-    return filename
+    return sorted(names)
 
 
-def build_context(retrieved):
+def retrieve(question, selected_documents, collection, embedding_model):
+    if not selected_documents:
+        return []
+
+    query_embedding = embedding_model.encode(
+        [question],
+        normalize_embeddings=True,
+    )[0].tolist()
+
+    result = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=TOP_K,
+        where={"source": {"$in": selected_documents}},
+        include=["documents", "metadatas", "distances"],
+    )
+
+    retrieved = []
+    documents = result.get("documents", [[]])[0]
+    metadatas = result.get("metadatas", [[]])[0]
+    distances = result.get("distances", [[]])[0]
+
+    for document, metadata, distance in zip(
+        documents, metadatas, distances
+    ):
+        retrieved.append({
+            "text": document,
+            "source": metadata.get("source", "Unknown"),
+            "chunk": metadata.get("chunk", "?"),
+            "distance": distance,
+        })
+
+    return retrieved
+
+
+def generate_answer(question, retrieved):
+    if not retrieved:
+        return (
+            "I couldn't find relevant text in the selected documents."
+        ), []
+
     context_parts = []
-    sources = []
 
-    for index, item in enumerate(retrieved, start=1):
-        label = f"S{index}"
-        location = source_location(item["metadata"])
-
+    for i, item in enumerate(retrieved, start=1):
         context_parts.append(
-            f"[{label}] Source: {location}\n"
+            f"[Source S{i}: {item['source']}, chunk {item['chunk']}]\n"
             f"{item['text']}"
         )
 
-        sources.append({
-            "label": label,
-            "location": location,
-            "text": item["text"],
-            "distance": item["distance"]
-        })
-
-    return "\n\n".join(context_parts), sources
-
-
-# ==========================================
-# OLLAMA ANSWER GENERATION
-# ==========================================
-
-def generate_answer(question, context):
-    prompt = f"""
-You are a helpful AI document assistant.
-
-Instructions:
-1. Answer the user's exact question.
-2. Use only information in the supplied excerpts.
-3. Cite relevant excerpts using labels such as [S1] and [S2].
-4. Never invent facts, quotations, or citations.
-5. If the answer is not in the excerpts, say:
-   "I could not find this information in the selected documents."
-6. Keep the response clear, organized, and easy to understand.
-7. Use bullets when they improve readability.
-
-DOCUMENT EXCERPTS:
-{context}
-
-QUESTION:
-{question}
-
-ANSWER:
-"""
+    context = "\n\n".join(context_parts)
 
     response = ollama.chat(
         model=MODEL_NAME,
         messages=[
             {
+                "role": "system",
+                "content": (
+                    "You are DocuMind AI, a helpful document "
+                    "question-answering assistant. Answer using the "
+                    "supplied document context. Do not invent facts "
+                    "that are not supported by the context. If the "
+                    "answer is not present, say you could not find it "
+                    "in the selected documents. Keep answers clear "
+                    "and concise. Refer to sources as S1, S2, and so "
+                    "on when useful."
+                ),
+            },
+            {
                 "role": "user",
-                "content": prompt
-            }
+                "content": (
+                    f"Document context:\n{context}\n\n"
+                    f"Question: {question}\n\n"
+                    "Answer based on the context above."
+                ),
+            },
         ],
-        options={"temperature": 0}
     )
 
-    return response["message"]["content"].strip()
+    return response["message"]["content"], retrieved
 
 
-# ==========================================
-# CLEAR DOCUMENT DATABASE
-# ==========================================
+def display_sources(sources):
+    if not sources:
+        return
 
-def clear_database():
-    global collection
+    with st.expander("View sources"):
+        for i, source in enumerate(sources, start=1):
+            st.markdown(
+                f"**S{i} · {source['source']} · Chunk {source['chunk']}**"
+            )
+            st.caption(source["text"])
 
-    client.delete_collection(
-        name=COLLECTION_NAME
+
+try:
+    collection, embedding_model = get_resources()
+except Exception as error:
+    st.error(f"Could not initialize the chatbot: {error}")
+    st.info(
+        "Check your dependencies and internet connection for "
+        "downloading the embedding model."
     )
+    st.stop()
 
-    collection = client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        metadata={"hnsw:space": "cosine"}
-    )
-
-    st.session_state.messages = []
-
-
-# ==========================================
-# SIDEBAR
-# ==========================================
-
-with st.sidebar:
-    st.markdown("""
-    <div class="brand">
-        <div class="brand-icon">✳</div>
-        <div>
-            <div class="brand-title">DocuMind AI</div>
-            <div class="brand-subtitle">YOUR LOCAL KNOWLEDGE HUB</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown(
-        '<div class="section-label">DOCUMENT WORKSPACE</div>',
-        unsafe_allow_html=True
-    )
-
-    st.write("")
-
-    uploaded_files = st.file_uploader(
-        "Add documents",
-        type=["pdf", "txt", "csv"],
-        accept_multiple_files=True,
-        help="Upload PDF, TXT, or CSV files."
-    )
-
-    if st.button(
-        "＋  Index documents",
-        type="primary",
-        use_container_width=True
-    ):
-        if uploaded_files:
-            with st.spinner("Reading and indexing documents..."):
-                process_documents(uploaded_files)
-
-            st.rerun()
-        else:
-            st.warning("Choose at least one file first.")
-
-    st.divider()
-
-    available_files = get_available_files()
-
-    st.markdown(
-        '<div class="section-label">SEARCH SCOPE</div>',
-        unsafe_allow_html=True
-    )
-
-    if available_files:
-        selected_files = st.multiselect(
-            "Search within",
-            options=available_files,
-            default=available_files,
-            label_visibility="collapsed",
-            help="Only selected documents will be searched."
-        )
-    else:
-        selected_files = []
-        st.caption("Your indexed documents will appear here.")
-
-    st.divider()
-
-    st.markdown(
-        '<div class="section-label">WORKSPACE OVERVIEW</div>',
-        unsafe_allow_html=True
-    )
-
-    metric_col1, metric_col2 = st.columns(2)
-
-    with metric_col1:
-        st.metric(
-            "Documents",
-            len(available_files)
-        )
-
-    with metric_col2:
-        st.metric(
-            "Text chunks",
-            collection.count()
-        )
-
-    with st.expander("View indexed files"):
-        if available_files:
-            for filename in available_files:
-                st.markdown(f"📄 `{filename}`")
-        else:
-            st.caption("No files indexed yet.")
-
-    st.divider()
-
-    if st.button(
-        "＋  New conversation",
-        use_container_width=True
-    ):
-        st.session_state.messages = []
-        st.rerun()
-
-    if st.button(
-        "🗑  Clear document database",
-        use_container_width=True
-    ):
-        try:
-            clear_database()
-            st.rerun()
-        except Exception as error:
-            st.error(f"Could not clear database: {error}")
-
-    st.markdown("""
-    <div style="padding-top:18px; color:#8190A9; font-size:11px;">
-        <span class="status-dot"></span> Local workspace
-        <br><br>
-        Powered by Ollama · ChromaDB
-    </div>
-    """, unsafe_allow_html=True)
-
-
-# ==========================================
-# MAIN HEADER
-# ==========================================
-
-st.markdown("""
-<div class="hero">
-    <div class="hero-tag">✦ YOUR PERSONAL AI RESEARCH ASSISTANT</div>
-    <h1>Your documents,<br>understood.</h1>
-    <p>
-        Turn your files into answers. Ask questions, explore ideas,
-        and discover useful information from your own documents.
-        Your responses are generated using your local AI model.
-    </p>
-</div>
-""", unsafe_allow_html=True)
-
-
-# ==========================================
-# METRIC CARDS
-# ==========================================
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-icon">📁</div>
-        <div class="metric-number">{len(available_files)}</div>
-        <div class="metric-label">Indexed documents</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col2:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-icon">🧩</div>
-        <div class="metric-number">{collection.count()}</div>
-        <div class="metric-label">Searchable text chunks</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col3:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-icon">⚡</div>
-        <div class="metric-number">Local</div>
-        <div class="metric-label">Answer generation</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-st.write("")
-
-
-# ==========================================
-# CHAT HEADER
-# ==========================================
-
-st.markdown(
-    '<div class="section-label">DOCUMENT CHAT</div>',
-    unsafe_allow_html=True
-)
-
-st.subheader("What would you like to know?")
-
-st.caption(
-    "Ask a question about your indexed documents. "
-    "Answers can include references to the retrieved sources."
-)
-
-
-# ==========================================
-# INITIALIZE CHAT HISTORY
-# ==========================================
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+if "selected_docs" not in st.session_state:
+    st.session_state.selected_docs = []
 
-# ==========================================
-# STARTER QUESTIONS
-# ==========================================
+if "pending_question" not in st.session_state:
+    st.session_state.pending_question = None
+
+
+with st.sidebar:
+    st.markdown(
+        '<div class="sidebar-brand">DocuMind '
+        '<span style="color:#829875">AI</span></div>'
+        '<div class="sidebar-subtitle">YOUR DOCUMENT ASSISTANT</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.divider()
+    st.markdown("### Add documents")
+
+    uploaded_files = st.file_uploader(
+        "Upload PDF, TXT, or CSV files",
+        type=["pdf", "txt", "csv"],
+        accept_multiple_files=True,
+        help="Documents are indexed in your local ChromaDB database.",
+    )
+
+    if st.button(
+        "Index documents",
+        type="primary",
+        use_container_width=True,
+    ):
+        if not uploaded_files:
+            st.warning("Choose at least one document first.")
+        else:
+            success_count = 0
+
+            with st.spinner("Reading and indexing documents..."):
+                for uploaded_file in uploaded_files:
+                    try:
+                        count = index_document(
+                            uploaded_file, collection, embedding_model
+                        )
+                        st.success(
+                            f"{uploaded_file.name}: {count} chunks indexed"
+                        )
+                        success_count += 1
+                    except Exception as error:
+                        st.error(f"{uploaded_file.name}: {error}")
+
+            if success_count:
+                st.rerun()
+
+    st.divider()
+    st.markdown("### Your documents")
+
+    available_docs = get_document_names(collection)
+
+    if available_docs:
+        previous_selection = [
+            name for name in st.session_state.selected_docs
+            if name in available_docs
+        ]
+
+        selected_docs = st.multiselect(
+            "Choose documents to search",
+            options=available_docs,
+            default=previous_selection or available_docs,
+        )
+        st.session_state.selected_docs = selected_docs
+
+        if st.button(
+            "Remove selected documents",
+            use_container_width=True,
+        ):
+            if not selected_docs:
+                st.warning("Select a document to remove.")
+            else:
+                for name in selected_docs:
+                    existing = collection.get(
+                        where={"source": name},
+                        include=["metadatas"],
+                    )
+                    ids = existing.get("ids", [])
+
+                    if ids:
+                        collection.delete(ids=ids)
+
+                st.session_state.selected_docs = []
+                st.session_state.messages = []
+                st.rerun()
+    else:
+        st.session_state.selected_docs = []
+        st.caption("Your indexed documents will appear here.")
+
+    st.divider()
+
+    if st.button("Clear chat history", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
+
+    st.markdown(
+        '<div class="info-note">Your vector database is stored locally in '
+        '<code>chroma_db</code>. Ollama must be running for answers.</div>',
+        unsafe_allow_html=True,
+    )
+
+
+all_chunks = collection.count()
+document_count = len(get_document_names(collection))
+
+st.markdown("""
+<div class="hero">
+  <div class="eyebrow">DOCUMENT INTELLIGENCE</div>
+  <h1>Ask your documents anything.</h1>
+  <p>Find answers from your files with AI-powered search and source
+  references. Your documents stay in your local workspace.</p>
+</div>
+""", unsafe_allow_html=True)
+
+metric1, metric2, metric3 = st.columns(3)
+
+with metric1:
+    st.markdown(
+        f'<div class="metric-card"><div class="metric-label">Indexed documents</div>'
+        f'<div class="metric-value">{document_count}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+with metric2:
+    st.markdown(
+        f'<div class="metric-card"><div class="metric-label">Text chunks</div>'
+        f'<div class="metric-value">{all_chunks}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+with metric3:
+    st.markdown(
+        '<div class="metric-card"><div class="metric-label">Language model</div>'
+        '<div class="metric-value" style="font-size:20px">Llama 3.2 1B</div></div>',
+        unsafe_allow_html=True,
+    )
+
+st.markdown(
+    '<div class="section-title">Conversation</div>',
+    unsafe_allow_html=True,
+)
 
 if not st.session_state.messages:
-    st.markdown("**Try asking**")
+    st.markdown("#### Welcome to DocuMind AI")
+    st.write("Choose a suggested question or type your own below.")
 
-    prompt_col1, prompt_col2 = st.columns(2)
+    suggestions = [
+        "Summarize the selected documents",
+        "What are the main topics?",
+        "Find important facts and details",
+    ]
 
-    with prompt_col1:
-        if st.button(
-            "✦  Summarize my document",
-            use_container_width=True
-        ):
-            st.session_state.pending_question = (
-                "Summarize the main points of the selected documents."
-            )
-            st.rerun()
+    suggestion_cols = st.columns(len(suggestions))
 
-    with prompt_col2:
-        if st.button(
-            "⌕  Find key information",
-            use_container_width=True
-        ):
-            st.session_state.pending_question = (
-                "What are the most important facts in the selected documents?"
-            )
-            st.rerun()
+    for i, suggestion in enumerate(suggestions):
+        with suggestion_cols[i]:
+            if st.button(suggestion, use_container_width=True):
+                st.session_state.pending_question = suggestion
+                st.rerun()
 
-
-# ==========================================
-# DISPLAY CHAT HISTORY
-# ==========================================
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-        if message.get("sources"):
-            with st.expander("📚 Sources and retrieved excerpts"):
-                for source in message["sources"]:
-                    st.markdown(
-                        f"**[{source['label']}] {source['location']}**"
-                    )
-                    st.write(source["text"])
+        if message["role"] == "assistant" and message.get("sources"):
+            display_sources(message["sources"])
 
 
-# ==========================================
-# PROCESS QUESTION
-# ==========================================
+question = st.chat_input("Ask a question about your documents...")
 
-typed_question = st.chat_input(
-    "Message DocuMind AI...",
-    key="chat_input"
-)
-
-question = typed_question
-
-if not question and "pending_question" in st.session_state:
-    question = st.session_state.pop("pending_question")
-
+if st.session_state.pending_question:
+    question = st.session_state.pending_question
+    st.session_state.pending_question = None
 
 if question:
-    if not available_files:
+    if not st.session_state.selected_docs:
         st.warning(
-            "Upload and index a document in the sidebar before chatting."
+            "Upload and index a document, then select it in the sidebar."
         )
-
-    elif not selected_files:
-        st.warning(
-            "Select at least one document in the sidebar."
-        )
-
     else:
         st.session_state.messages.append({
             "role": "user",
-            "content": question
+            "content": question,
         })
 
         with st.chat_message("user"):
             st.markdown(question)
 
         with st.chat_message("assistant"):
-            try:
-                with st.spinner("Finding relevant passages..."):
-                    retrieved = retrieve_context(
+            with st.spinner(
+                "Searching your documents and generating an answer..."
+            ):
+                try:
+                    retrieved = retrieve(
                         question,
-                        selected_files
+                        st.session_state.selected_docs,
+                        collection,
+                        embedding_model,
                     )
 
-                if not retrieved:
-                    answer = (
-                        "I could not find relevant information "
-                        "in the selected documents."
+                    answer, sources = generate_answer(question, retrieved)
+                    st.markdown(answer)
+                    display_sources(sources)
+
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": answer,
+                        "sources": sources,
+                    })
+
+                except Exception as error:
+                    error_message = (
+                        f"Something went wrong: {error}\n\n"
+                        "Check that Ollama is running and the model "
+                        f"`{MODEL_NAME}` is installed."
                     )
-                    sources = []
+                    st.error(error_message)
 
-                else:
-                    context, sources = build_context(retrieved)
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": error_message,
+                        "sources": [],
+                    })
 
-                    with st.spinner("Preparing your answer..."):
-                        answer = generate_answer(
-                            question,
-                            context
-                        )
-
-                st.markdown(answer)
-
-                if sources:
-                    with st.expander("📚 Sources and retrieved excerpts"):
-                        for source in sources:
-                            st.markdown(
-                                f"**[{source['label']}] "
-                                f"{source['location']}**"
-                            )
-                            st.write(source["text"])
-                            st.caption(
-                                f"Retrieval distance: "
-                                f"{source['distance']:.4f}"
-                            )
-
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": answer,
-                    "sources": sources
-                })
-
-            except Exception as error:
-                answer = f"An error occurred: {error}"
-                st.error(answer)
-
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": answer,
-                    "sources": []
-                })
-
-
-# ==========================================
-# FOOTER
-# ==========================================
-
-st.markdown("""
-<div class="footer">
-    DOCUMIND AI &nbsp;·&nbsp; LOCAL DOCUMENT INTELLIGENCE
-    <br><br>
-    Built with Streamlit, Sentence Transformers, ChromaDB and Ollama
-</div>
-""", unsafe_allow_html=True)
+st.markdown(
+    '<div class="footer">DocuMind AI · Built with Streamlit, ChromaDB and Ollama</div>',
+    unsafe_allow_html=True,
+)
